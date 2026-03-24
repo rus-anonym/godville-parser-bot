@@ -6,7 +6,7 @@ on:
 
 jobs:
   push_to_registries:
-    name: Push Docker image to GitHub Container Registry 
+    name: Push Docker image to GitHub Container Registry
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -24,7 +24,7 @@ jobs:
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-        
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 

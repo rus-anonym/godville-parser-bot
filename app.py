@@ -1,16 +1,17 @@
 import asyncio
-import os
-import re
 import json
-import random
 import logging
-from pathlib import Path
-from typing import Optional, Tuple
+import os
+import random
+import re
 from contextlib import suppress
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional, Tuple
 
 from dotenv import load_dotenv
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
 
 # try zoneinfo (Python 3.9+)
 try:
@@ -22,113 +23,145 @@ except Exception:
 load_dotenv()
 
 
-def _env_flag(name: str, default: str = '0') -> bool:
-    return os.getenv(name, default).strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+def _env_flag(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
-logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s')
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(levelname)s - %(message)s")
 
-GODVILLE_LOGIN = os.getenv('GODVILLE_LOGIN')
-GODVILLE_PASSWORD = os.getenv('GODVILLE_PASSWORD')
+GODVILLE_LOGIN = os.getenv("GODVILLE_LOGIN")
+GODVILLE_PASSWORD = os.getenv("GODVILLE_PASSWORD")
 
 # Экономия ресурсов по умолчанию
-HEADLESS = _env_flag('HEADLESS', '1')
-BLOCK_TRACKERS = _env_flag('BLOCK_TRACKERS', '1')
-BLOCK_MEDIA = _env_flag('BLOCK_MEDIA', '1')  # режем image/font/media
-SAVE_STATE = _env_flag('SAVE_STATE', '1')  # хранить state.json (куки и пр.)
-AUTO_RESURRECT = _env_flag('AUTO_RESURRECT', '1')  # автоматически жать «Воскресить», если герой мёртв
+HEADLESS = _env_flag("HEADLESS", "1")
+BLOCK_TRACKERS = _env_flag("BLOCK_TRACKERS", "1")
+BLOCK_MEDIA = _env_flag("BLOCK_MEDIA", "1")  # режем image/font/media
+SAVE_STATE = _env_flag("SAVE_STATE", "1")  # хранить state.json (куки и пр.)
+AUTO_RESURRECT = _env_flag(
+    "AUTO_RESURRECT", "1"
+)  # автоматически жать «Воскресить», если герой мёртв
 
-STATE_PATH = Path(os.getenv('STATE_PATH', 'state.json'))
+STATE_PATH = Path(os.getenv("STATE_PATH", "state.json"))
 
-USER_AGENT = os.getenv('USER_AGENT',
-                       'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36')
-LOCALE = os.getenv('LOCALE', 'ru-RU')
-VIEWPORT_W = int(os.getenv('VIEWPORT_W', '960'))
-VIEWPORT_H = int(os.getenv('VIEWPORT_H', '600'))
+USER_AGENT = os.getenv(
+    "USER_AGENT",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+)
+LOCALE = os.getenv("LOCALE", "ru-RU")
+VIEWPORT_W = int(os.getenv("VIEWPORT_W", "960"))
+VIEWPORT_H = int(os.getenv("VIEWPORT_H", "600"))
 
-LOGIN_URL = 'https://godville.net/login'
-HERO_URL = 'https://godville.net/superhero'
+LOGIN_URL = "https://godville.net/login"
+HERO_URL = "https://godville.net/superhero"
 
 # Режим действий: random | good | bad
-ACTION_MODE_RAW = os.getenv('ACTION_MODE', 'random').strip().lower()
+ACTION_MODE_RAW = os.getenv("ACTION_MODE", "random").strip().lower()
 ALIASES = {
-    'rand': 'random', 'rnd': 'random', 'случайно': 'random',
-    'good-only': 'good', 'enc': 'good', 'encour': 'good', 'хорошо': 'good',
-    'bad-only': 'bad', 'pun': 'bad', 'punish': 'bad', 'плохо': 'bad'
+    "rand": "random",
+    "rnd": "random",
+    "случайно": "random",
+    "good-only": "good",
+    "enc": "good",
+    "encour": "good",
+    "хорошо": "good",
+    "bad-only": "bad",
+    "pun": "bad",
+    "punish": "bad",
+    "плохо": "bad",
 }
 ACTION_MODE = ALIASES.get(ACTION_MODE_RAW, ACTION_MODE_RAW)
-if ACTION_MODE not in ('random', 'good', 'bad'):
-    ACTION_MODE = 'random'
-ACTION_FALLBACK = _env_flag('ACTION_FALLBACK', '0')
+if ACTION_MODE not in ("random", "good", "bad"):
+    ACTION_MODE = "random"
+ACTION_FALLBACK = _env_flag("ACTION_FALLBACK", "0")
 
 # Интервалы между попытками действий
-MIN_ACTION_INTERVAL_SEC = int(os.getenv('MIN_ACTION_INTERVAL_SEC', '5'))
-MAX_ACTION_INTERVAL_SEC = int(os.getenv('MAX_ACTION_INTERVAL_SEC', '20'))
+MIN_ACTION_INTERVAL_SEC = int(os.getenv("MIN_ACTION_INTERVAL_SEC", "5"))
+MAX_ACTION_INTERVAL_SEC = int(os.getenv("MAX_ACTION_INTERVAL_SEC", "20"))
 
 # Когда кнопок нет N раз подряд — «спим»
-NO_BUTTONS_GRACE_CHECKS = int(os.getenv('NO_BUTTONS_GRACE_CHECKS', '3'))
-SHORT_RETRY_DELAY_SEC = float(os.getenv('SHORT_RETRY_DELAY_SEC', '1.5'))
+NO_BUTTONS_GRACE_CHECKS = int(os.getenv("NO_BUTTONS_GRACE_CHECKS", "3"))
+SHORT_RETRY_DELAY_SEC = float(os.getenv("SHORT_RETRY_DELAY_SEC", "1.5"))
 
-SLEEP_MIN_SEC = int(os.getenv('SLEEP_MIN_SEC', '3600'))
-SLEEP_MAX_SEC = int(os.getenv('SLEEP_MAX_SEC', '7200'))
+SLEEP_MIN_SEC = int(os.getenv("SLEEP_MIN_SEC", "3600"))
+SLEEP_MAX_SEC = int(os.getenv("SLEEP_MAX_SEC", "7200"))
 
 # Если не видим кнопку несколько раз — делаем мягкое обновление/переход
-RELOAD_ON_MISS = int(os.getenv('RELOAD_ON_MISS', '2'))  # после скольких промахов делать page.reload
-NAVIGATE_ON_MISS = int(os.getenv('NAVIGATE_ON_MISS', '4'))  # после скольких промахов делать goto(HERO_URL)
+RELOAD_ON_MISS = int(
+    os.getenv("RELOAD_ON_MISS", "2")
+)  # после скольких промахов делать page.reload
+NAVIGATE_ON_MISS = int(
+    os.getenv("NAVIGATE_ON_MISS", "4")
+)  # после скольких промахов делать goto(HERO_URL)
 
 # Тайминги и клики
-CLICK_TIMEOUT_MS = int(os.getenv('CLICK_TIMEOUT_MS', '2500'))
-DETECT_TIMEOUT_MS = int(os.getenv('DETECT_TIMEOUT_MS', '7000'))
-CLICK_RETRIES = int(os.getenv('CLICK_RETRIES', '3'))
-POST_CLICK_WAIT_MS = int(os.getenv('POST_CLICK_WAIT_MS', '800'))
+CLICK_TIMEOUT_MS = int(os.getenv("CLICK_TIMEOUT_MS", "2500"))
+DETECT_TIMEOUT_MS = int(os.getenv("DETECT_TIMEOUT_MS", "7000"))
+CLICK_RETRIES = int(os.getenv("CLICK_RETRIES", "3"))
+POST_CLICK_WAIT_MS = int(os.getenv("POST_CLICK_WAIT_MS", "800"))
 
 # Хосты-трекеры (отрежем для экономии трафика и шума)
 TRACKER_HOST_SUBSTR = (
-    'googletagmanager.com', 'google-analytics.com', 'doubleclick.net',
-    'g.doubleclick.net', 'www.google.com/ccm'
+    "googletagmanager.com",
+    "google-analytics.com",
+    "doubleclick.net",
+    "g.doubleclick.net",
+    "www.google.com/ccm",
 )
 
 # Селекторы кнопок
 GOOD_SELECTORS = [
-    '#cntrl1 a.enc_link', '#cntrl a.enc_link', 'a.enc_link',
-    'a:has-text("Сделать хорошо")', 'button:has-text("Сделать хорошо")',
-    '[onclick*="encour"]', 'a[href*="encour"]',
+    "#cntrl1 a.enc_link",
+    "#cntrl a.enc_link",
+    "a.enc_link",
+    'a:has-text("Сделать хорошо")',
+    'button:has-text("Сделать хорошо")',
+    '[onclick*="encour"]',
+    'a[href*="encour"]',
 ]
 BAD_SELECTORS = [
-    '#cntrl1 a.pun_link', '#cntrl a.pun_link', 'a.pun_link',
-    'a:has-text("Сделать плохо")', 'button:has-text("Сделать плохо")',
-    '[onclick*="punish"]', 'a[href*="punish"]',
+    "#cntrl1 a.pun_link",
+    "#cntrl a.pun_link",
+    "a.pun_link",
+    'a:has-text("Сделать плохо")',
+    'button:has-text("Сделать плохо")',
+    '[onclick*="punish"]',
+    'a[href*="punish"]',
 ]
 RESURRECT_SELECTORS = [
-    'a:has-text("Воскресить")', 'button:has-text("Воскресить")',
-    'text=/Воскр/i',
-    '[onclick*="resur"]', '[href*="resur"]',
-    '[onclick*="reviv"]', '[href*="reviv"]',
-    'a:has-text("Resurrect")', 'button:has-text("Resurrect")',
-    'a:has-text("Revive")', 'button:has-text("Revive")',
+    'a:has-text("Воскресить")',
+    'button:has-text("Воскресить")',
+    "text=/Воскр/i",
+    '[onclick*="resur"]',
+    '[href*="resur"]',
+    '[onclick*="reviv"]',
+    '[href*="reviv"]',
+    'a:has-text("Resurrect")',
+    'button:has-text("Resurrect")',
+    'a:has-text("Revive")',
+    'button:has-text("Revive")',
 ]
 
 # ===================== Газета / ежедневки =====================
-ENABLE_GAZETTE = _env_flag('ENABLE_GAZETTE', '1')
-COUPON_ENABLED = _env_flag('COUPON_ENABLED', '1')
-WORKER_HEARTBEAT_SEC = int(os.getenv('WORKER_HEARTBEAT_SEC', '120'))
-GPC_ENABLED = _env_flag('GPC_ENABLED', '1')
-GPC_TARGET_PCT = int(os.getenv('GPC_TARGET_PCT', '25'))
-GPC_LAST_CHANCE_MIN = int(os.getenv('GPC_LAST_CHANCE_MIN', '30'))
-GPC_LAST_CHANCE_MIN_PCT = int(os.getenv('GPC_LAST_CHANCE_MIN_PCT', '5'))
-GPC_POLL_MIN_MS = int(os.getenv('GPC_POLL_MIN_MS', '400'))
-GPC_POLL_MAX_MS = int(os.getenv('GPC_POLL_MAX_MS', '1200'))
-GPC_DISABLED_RECHECK_SEC = int(os.getenv('GPC_DISABLED_RECHECK_SEC', '10'))
-GPC_DISABLED_RETRY_COUNT = int(os.getenv('GPC_DISABLED_RETRY_COUNT', '3'))
-GPC_AUTO_REFRESH = _env_flag('GPC_AUTO_REFRESH', '0')
-GPC_FAST_WINDOW_BELOW = int(os.getenv('GPC_FAST_WINDOW_BELOW', '3'))
-GPC_LOG_DELTA = int(os.getenv('GPC_LOG_DELTA', '5'))
+ENABLE_GAZETTE = _env_flag("ENABLE_GAZETTE", "1")
+COUPON_ENABLED = _env_flag("COUPON_ENABLED", "1")
+WORKER_HEARTBEAT_SEC = int(os.getenv("WORKER_HEARTBEAT_SEC", "120"))
+GPC_ENABLED = _env_flag("GPC_ENABLED", "1")
+GPC_TARGET_PCT = int(os.getenv("GPC_TARGET_PCT", "25"))
+GPC_LAST_CHANCE_MIN = int(os.getenv("GPC_LAST_CHANCE_MIN", "30"))
+GPC_LAST_CHANCE_MIN_PCT = int(os.getenv("GPC_LAST_CHANCE_MIN_PCT", "5"))
+GPC_POLL_MIN_MS = int(os.getenv("GPC_POLL_MIN_MS", "400"))
+GPC_POLL_MAX_MS = int(os.getenv("GPC_POLL_MAX_MS", "1200"))
+GPC_DISABLED_RECHECK_SEC = int(os.getenv("GPC_DISABLED_RECHECK_SEC", "10"))
+GPC_DISABLED_RETRY_COUNT = int(os.getenv("GPC_DISABLED_RETRY_COUNT", "3"))
+GPC_AUTO_REFRESH = _env_flag("GPC_AUTO_REFRESH", "0")
+GPC_FAST_WINDOW_BELOW = int(os.getenv("GPC_FAST_WINDOW_BELOW", "3"))
+GPC_LOG_DELTA = int(os.getenv("GPC_LOG_DELTA", "5"))
 
-GAZETTE_URL = os.getenv('GAZETTE_URL', 'https://godville.net/news')
-GODVILLE_TZ = os.getenv('GODVILLE_TZ', 'Europe/Moscow')
-DAILY_RESET_TIME = os.getenv('DAILY_RESET_TIME', '00:00')  # HH:MM
-BOT_STATE_PATH = Path(os.getenv('BOT_STATE_PATH', 'bot_state.json'))
+GAZETTE_URL = os.getenv("GAZETTE_URL", "https://godville.net/news")
+GODVILLE_TZ = os.getenv("GODVILLE_TZ", "Europe/Moscow")
+DAILY_RESET_TIME = os.getenv("DAILY_RESET_TIME", "00:00")  # HH:MM
+BOT_STATE_PATH = Path(os.getenv("BOT_STATE_PATH", "bot_state.json"))
 
 
 # ===================== Маршрутизация запросов =====================
@@ -142,7 +175,7 @@ async def setup_routing(context):
             url = req.url
             rtype = req.resource_type
 
-            if BLOCK_MEDIA and rtype in ('image', 'media', 'font'):
+            if BLOCK_MEDIA and rtype in ("image", "media", "font"):
                 return await route.abort()
 
             if BLOCK_TRACKERS and any(h in url for h in TRACKER_HOST_SUBSTR):
@@ -159,10 +192,16 @@ async def setup_routing(context):
 # ===================== Утилиты =====================
 async def dismiss_cookie_banners(page):
     candidates = (
-        'button:has-text("Принять")', 'button:has-text("Соглас")',
-        'button:has-text("OK")', 'button:has-text("ОК")',
-        'button:has-text("Accept")', 'button:has-text("I agree")',
-        'text=Принять', 'text=Соглас', 'text=Accept', 'text=I agree',
+        'button:has-text("Принять")',
+        'button:has-text("Соглас")',
+        'button:has-text("OK")',
+        'button:has-text("ОК")',
+        'button:has-text("Accept")',
+        'button:has-text("I agree")',
+        "text=Принять",
+        "text=Соглас",
+        "text=Accept",
+        "text=I agree",
     )
     for sel in candidates:
         try:
@@ -199,18 +238,18 @@ async def _first_visible(page, selectors) -> Tuple[Optional[object], Optional[st
     return None, None
 
 
-async def wait_prana_controls(page, which='any', timeout_ms=DETECT_TIMEOUT_MS) -> bool:
+async def wait_prana_controls(page, which="any", timeout_ms=DETECT_TIMEOUT_MS) -> bool:
     """Ждём появления кнопок 'Сделать хорошо/плохо'. which: any|good|bad"""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + (timeout_ms / 1000.0)
     while loop.time() < deadline:
         good_loc, _ = await _first_visible(page, GOOD_SELECTORS)
         bad_loc, _ = await _first_visible(page, BAD_SELECTORS)
-        if which == 'good' and good_loc:
+        if which == "good" and good_loc:
             return True
-        if which == 'bad' and bad_loc:
+        if which == "bad" and bad_loc:
             return True
-        if which == 'any' and (good_loc or bad_loc):
+        if which == "any" and (good_loc or bad_loc):
             return True
         await asyncio.sleep(0.25)
     return False
@@ -235,7 +274,9 @@ async def _element_enabled(loc) -> bool:
             return False
         disabled_attr = await h.get_attribute("disabled")
         aria_dis = await h.get_attribute("aria-disabled")
-        if disabled_attr is not None or (aria_dis and aria_dis.lower() in ("true", "1")):
+        if disabled_attr is not None or (
+            aria_dis and aria_dis.lower() in ("true", "1")
+        ):
             return False
         return True
     except Exception:
@@ -291,7 +332,7 @@ async def wait_after_resurrect(page, timeout_ms=5000) -> bool:
     while loop.time() < deadline:
         loc, _ = await _first_visible(page, RESURRECT_SELECTORS)
         if not loc:
-            if await wait_prana_controls(page, which='any', timeout_ms=800):
+            if await wait_prana_controls(page, which="any", timeout_ms=800):
                 return True
         await asyncio.sleep(0.2)
     return False
@@ -320,7 +361,9 @@ async def perform_login(page, login: str, password: str) -> bool:
     await page.goto(LOGIN_URL, wait_until="domcontentloaded")
 
     await dismiss_cookie_banners(page)
-    await page.wait_for_selector('form[action="/login"], input[name], button[type="submit"]', timeout=20000)
+    await page.wait_for_selector(
+        'form[action="/login"], input[name], button[type="submit"]', timeout=20000
+    )
 
     user_sel = 'input[name="username"], input[name="login"], #username, form[action="/login"] input[type="text"]'
     pass_sel = 'input[name="password"], #password, form[action="/login"] input[type="password"]'
@@ -343,7 +386,7 @@ async def perform_login(page, login: str, password: str) -> bool:
         return False
 
     try:
-        await page.wait_for_selector('#cntrl1, #cntrl, #god_name', timeout=20000)
+        await page.wait_for_selector("#cntrl1, #cntrl, #god_name", timeout=20000)
     except PlaywrightTimeoutError:
         logging.error("Не дождался признаков страницы героя.")
         await save_debug(page, "hero_wait_failed")
@@ -379,7 +422,7 @@ def _now_tz():
 def _next_daily_reset_dt():
     now = _now_tz()
     try:
-        hh, mm = map(int, DAILY_RESET_TIME.split(':'))
+        hh, mm = map(int, DAILY_RESET_TIME.split(":"))
     except Exception:
         hh, mm = 0, 0
     reset = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
@@ -395,7 +438,7 @@ def _today_key(prefix: str) -> str:
 def _load_bot_state() -> dict:
     try:
         if BOT_STATE_PATH.exists():
-            with open(BOT_STATE_PATH, 'r', encoding='utf-8') as f:
+            with open(BOT_STATE_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception:
         pass
@@ -404,7 +447,7 @@ def _load_bot_state() -> dict:
 
 def _save_bot_state(data: dict):
     with suppress(Exception):
-        with open(BOT_STATE_PATH, 'w', encoding='utf-8') as f:
+        with open(BOT_STATE_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
 
@@ -432,9 +475,11 @@ class GazettePage:
     # ---------- Купон ----------
     async def claim_coupon(self) -> bool:
         try:
-            btn = self.page.locator('#coupon_b')
+            btn = self.page.locator("#coupon_b")
             if not (await btn.count()):
-                logging.info("Газета: купон — кнопка не найдена (возможно, уже забран).")
+                logging.info(
+                    "Газета: купон — кнопка не найдена (возможно, уже забран)."
+                )
                 return False
             if await btn.is_disabled():
                 logging.info("Газета: купон — кнопка задизейблена (уже забран).")
@@ -448,7 +493,7 @@ class GazettePage:
                     if await btn.is_disabled() or not await btn.is_visible():
                         logging.info("Газета: купон — успешно забран.")
                         return True
-                msg = self.page.locator('#cpn_msg')
+                msg = self.page.locator("#cpn_msg")
                 if await msg.count():
                     txt = (await msg.inner_text()).strip()
                     logging.info(f"Газета: купон — сообщение: {txt or '(пусто)'}")
@@ -461,17 +506,17 @@ class GazettePage:
     # ---------- Праноконденсатор ----------
     async def _gpc_percent(self) -> Optional[int]:
         try:
-            loc = self.page.locator('#gpc_val')
+            loc = self.page.locator("#gpc_val")
             if not (await loc.count()):
                 return None
             text = (await loc.inner_text()).strip()
-            m = re.search(r'(\d+)', text)
+            m = re.search(r"(\d+)", text)
             return int(m.group(1)) if m else None
         except Exception:
             return None
 
     async def _gpc_can_discharge(self) -> bool:
-        btn = self.page.locator('#gp_cap_use')
+        btn = self.page.locator("#gp_cap_use")
         if not (await btn.count()):
             return False
         with suppress(Exception):
@@ -489,7 +534,7 @@ class GazettePage:
         if not GPC_AUTO_REFRESH:
             return
         try:
-            r = self.page.locator('#gp_cap_r')
+            r = self.page.locator("#gp_cap_r")
             if await r.count() and await r.is_visible():
                 logging.debug("Газета: GPC — жму «Обновить».")
                 await r.click(timeout=800)
@@ -497,7 +542,9 @@ class GazettePage:
         except Exception as e:
             logging.debug(f"Газета: GPC — не удалось нажать «Обновить»: {e}")
 
-    async def _gpc_wait_disabled_confirmation(self, retries: int, delay_sec: int) -> bool:
+    async def _gpc_wait_disabled_confirmation(
+        self, retries: int, delay_sec: int
+    ) -> bool:
         """
         True — кнопка стабильно disabled во всех повторах.
         False — где-то по пути снова стала доступной.
@@ -517,7 +564,7 @@ class GazettePage:
     async def _gpc_discharge(self) -> Tuple[bool, str]:
         """Пытается разрядить. Возвращает (ok, reason)."""
         try:
-            btn = self.page.locator('#gp_cap_use')
+            btn = self.page.locator("#gp_cap_use")
             if not (await btn.count()):
                 return False, "no_button"
             if await btn.is_disabled():
@@ -528,11 +575,13 @@ class GazettePage:
             if not ok:
                 return False, "click_failed"
 
-            err = self.page.locator('#gpc_err')
+            err = self.page.locator("#gpc_err")
             if await err.count():
                 txt_raw = (await err.inner_text()).strip()
                 txt = txt_raw.lower()
-                if ("уже" in txt and "сегодня" in txt) or ("already" in txt and "today" in txt):
+                if ("уже" in txt and "сегодня" in txt) or (
+                    "already" in txt and "today" in txt
+                ):
                     return False, "already_used_today"
                 if txt_raw:
                     return False, f"server_msg: {txt_raw}"
@@ -553,13 +602,13 @@ class GazettePage:
             return False, f"exception: {e}"
 
     async def discharge_when_ready(
-            self,
-            target_pct: int = GPC_TARGET_PCT,
-            last_chance_minutes: int = GPC_LAST_CHANCE_MIN,
-            last_chance_min_pct: int = GPC_LAST_CHANCE_MIN_PCT,
-            poll_min_ms: int = GPC_POLL_MIN_MS,
-            poll_max_ms: int = GPC_POLL_MAX_MS,
-            max_hours: float = 20.0,
+        self,
+        target_pct: int = GPC_TARGET_PCT,
+        last_chance_minutes: int = GPC_LAST_CHANCE_MIN,
+        last_chance_min_pct: int = GPC_LAST_CHANCE_MIN_PCT,
+        poll_min_ms: int = GPC_POLL_MIN_MS,
+        poll_max_ms: int = GPC_POLL_MAX_MS,
+        max_hours: float = 20.0,
     ) -> bool | None:
         """
         Ждём, пока проценты >= target_pct и нажимаем «Разрядить».
@@ -573,12 +622,15 @@ class GazettePage:
 
         last_logged_pct = None
         logging.info(
-            f"Газета: GPC — мониторинг запущен. Цель={target_pct}%, последний шанс за {last_chance_minutes} мин (>= {last_chance_min_pct}%).")
+            f"Газета: GPC — мониторинг запущен. Цель={target_pct}%, последний шанс за {last_chance_minutes} мин (>= {last_chance_min_pct}%)."
+        )
 
         while _now_tz() < early_deadline:
             pct = await self._gpc_percent()
             if pct is None:
-                logging.debug("Газета: GPC — элемент #gpc_val не найден, обновляю страницу.")
+                logging.debug(
+                    "Газета: GPC — элемент #gpc_val не найден, обновляю страницу."
+                )
                 with suppress(Exception):
                     await self.open()
                 await asyncio.sleep(poll_max_ms / 1000.0)
@@ -591,44 +643,58 @@ class GazettePage:
 
             now = _now_tz()
             near_goal = pct >= max(0, target_pct - GPC_FAST_WINDOW_BELOW)
-            want_try = (pct >= target_pct) or (now >= last_chance_dt and pct >= last_chance_min_pct)
+            want_try = (pct >= target_pct) or (
+                now >= last_chance_dt and pct >= last_chance_min_pct
+            )
 
             if want_try:
                 for attempt in range(1, CLICK_RETRIES + 1):
                     ok, why = await self._gpc_discharge()
-                    logging.info(f"Газета: GPC — попытка #{attempt} при {pct}% -> {ok} ({why})")
+                    logging.info(
+                        f"Газета: GPC — попытка #{attempt} при {pct}% -> {ok} ({why})"
+                    )
 
                     if ok:
                         logging.info("Газета: GPC — разрядка успешна.")
                         return True
 
                     if why == "already_used_today":
-                        logging.info("Газета: GPC — уже разряжали сегодня (по ответу сервера).")
+                        logging.info(
+                            "Газета: GPC — уже разряжали сегодня (по ответу сервера)."
+                        )
                         return True
 
                     if why in ("disabled", "no_button", "no_drop", "click_failed"):
                         stable = await self._gpc_wait_disabled_confirmation(
                             retries=GPC_DISABLED_RETRY_COUNT,
-                            delay_sec=GPC_DISABLED_RECHECK_SEC
+                            delay_sec=GPC_DISABLED_RECHECK_SEC,
                         )
                         if not stable:
-                            logging.debug("Газета: GPC — кнопка снова доступна, повторяю попытку.")
+                            logging.debug(
+                                "Газета: GPC — кнопка снова доступна, повторяю попытку."
+                            )
                             continue
-                        logging.debug("Газета: GPC — кнопка стабильно недоступна, ждём набора процентов.")
+                        logging.debug(
+                            "Газета: GPC — кнопка стабильно недоступна, ждём набора процентов."
+                        )
                         break
 
                     await asyncio.sleep(0.3 + 0.2 * attempt)
 
             # Финальная попытка прямо перед ресетом — «что есть»
-            if (_next_daily_reset_dt() - now) <= timedelta(seconds=max(poll_max_ms / 1000.0, 5)):
+            if (_next_daily_reset_dt() - now) <= timedelta(
+                seconds=max(poll_max_ms / 1000.0, 5)
+            ):
                 for attempt in range(1, CLICK_RETRIES + 1):
                     ok, why = await self._gpc_discharge()
-                    logging.info(f"Газета: GPC — финал перед ресетом, попытка #{attempt} -> {ok} ({why})")
+                    logging.info(
+                        f"Газета: GPC — финал перед ресетом, попытка #{attempt} -> {ok} ({why})"
+                    )
                     if ok or why == "already_used_today":
                         return True
                     stable = await self._gpc_wait_disabled_confirmation(
                         retries=GPC_DISABLED_RETRY_COUNT,
-                        delay_sec=GPC_DISABLED_RECHECK_SEC
+                        delay_sec=GPC_DISABLED_RECHECK_SEC,
                     )
                     if not stable:
                         continue
@@ -659,7 +725,9 @@ async def click_resurrect_if_needed(page) -> bool:
                 ok = await wait_after_resurrect(page, timeout_ms=2500)
                 return ok
 
-            ok = await strong_click(page, loc, what="Воскресить", timeout=CLICK_TIMEOUT_MS)
+            ok = await strong_click(
+                page, loc, what="Воскресить", timeout=CLICK_TIMEOUT_MS
+            )
             await asyncio.sleep(POST_CLICK_WAIT_MS / 1000.0)
             if ok and await wait_after_resurrect(page, timeout_ms=3500):
                 logging.info("Воскрешение выполнено.")
@@ -688,21 +756,25 @@ async def click_prana_action(page) -> bool:
         if resurrected:
             return True
 
-    which = 'any' if ACTION_MODE == 'random' else ACTION_MODE
+    which = "any" if ACTION_MODE == "random" else ACTION_MODE
     if not await wait_prana_controls(page, which=which, timeout_ms=DETECT_TIMEOUT_MS):
         return False
 
     good_loc, bad_loc, _ = await find_action_buttons(page)
 
     candidates = []
-    if ACTION_MODE == 'random':
+    if ACTION_MODE == "random":
         if random.choice([True, False]):
-            if good_loc: candidates.append(("Сделать хорошо", "good"))
-            if bad_loc:  candidates.append(("Сделать плохо", "bad"))
+            if good_loc:
+                candidates.append(("Сделать хорошо", "good"))
+            if bad_loc:
+                candidates.append(("Сделать плохо", "bad"))
         else:
-            if bad_loc:  candidates.append(("Сделать плохо", "bad"))
-            if good_loc: candidates.append(("Сделать хорошо", "good"))
-    elif ACTION_MODE == 'good':
+            if bad_loc:
+                candidates.append(("Сделать плохо", "bad"))
+            if good_loc:
+                candidates.append(("Сделать хорошо", "good"))
+    elif ACTION_MODE == "good":
         if good_loc:
             candidates.append(("Сделать хорошо", "good"))
         elif ACTION_FALLBACK and bad_loc:
@@ -722,7 +794,9 @@ async def click_prana_action(page) -> bool:
                 if not loc_cur:
                     break
 
-                ok = await strong_click(page, loc_cur, what=title, timeout=CLICK_TIMEOUT_MS)
+                ok = await strong_click(
+                    page, loc_cur, what=title, timeout=CLICK_TIMEOUT_MS
+                )
                 await asyncio.sleep(POST_CLICK_WAIT_MS / 1000.0)
                 if ok:
                     if await wait_after_prana_click(page, timeout_ms=2500):
@@ -785,7 +859,9 @@ async def gazette_worker(context, login, password):
                 await save_debug(page, "gazette_worker_debug")
 
         # Если всё сделано — ждём до ресета, иначе — короткий сон и продолжаем пасти GPC
-        all_done = (_is_done_today("coupon") or not COUPON_ENABLED) and (_is_done_today("gpc") or not GPC_ENABLED)
+        all_done = (_is_done_today("coupon") or not COUPON_ENABLED) and (
+            _is_done_today("gpc") or not GPC_ENABLED
+        )
         if all_done:
             to_reset = (_next_daily_reset_dt() - _now_tz()).total_seconds()
             nap = max(60.0, to_reset + random.uniform(15, 60))
@@ -827,7 +903,9 @@ async def run_bot():
                 context_kwargs["storage_state"] = state_obj
                 logging.info(f"Loaded storage state from {STATE_PATH}")
             except Exception as e:
-                logging.warning(f"Failed to load storage state from {STATE_PATH}: {e}. Will login fresh.")
+                logging.warning(
+                    f"Failed to load storage state from {STATE_PATH}: {e}. Will login fresh."
+                )
 
         context = await browser.new_context(**context_kwargs)
         await setup_routing(context)
@@ -839,7 +917,9 @@ async def run_bot():
 
         gaz_task = None
         try:
-            if not await ensure_logged_in(context, page, GODVILLE_LOGIN, GODVILLE_PASSWORD):
+            if not await ensure_logged_in(
+                context, page, GODVILLE_LOGIN, GODVILLE_PASSWORD
+            ):
                 logging.error("Не удалось авторизоваться. Останавливаюсь.")
                 return
 
@@ -851,7 +931,9 @@ async def run_bot():
 
             # Запускаем фонового работника газеты
             if ENABLE_GAZETTE:
-                gaz_task = asyncio.create_task(gazette_worker(context, GODVILLE_LOGIN, GODVILLE_PASSWORD))
+                gaz_task = asyncio.create_task(
+                    gazette_worker(context, GODVILLE_LOGIN, GODVILLE_PASSWORD)
+                )
                 logging.info("Газетный воркер запущен.")
 
             logging.info(
@@ -862,7 +944,9 @@ async def run_bot():
 
             while True:
                 ticks += 1
-                await asyncio.sleep(random.uniform(MIN_ACTION_INTERVAL_SEC, MAX_ACTION_INTERVAL_SEC))
+                await asyncio.sleep(
+                    random.uniform(MIN_ACTION_INTERVAL_SEC, MAX_ACTION_INTERVAL_SEC)
+                )
 
                 # Иногда прогоняем скрытые баннеры
                 if ticks % 10 == 0:
@@ -870,7 +954,9 @@ async def run_bot():
 
                 # Если разлогинило — перелогин
                 if "login" in page.url:
-                    if not await ensure_logged_in(context, page, GODVILLE_LOGIN, GODVILLE_PASSWORD):
+                    if not await ensure_logged_in(
+                        context, page, GODVILLE_LOGIN, GODVILLE_PASSWORD
+                    ):
                         logging.error("Перелогин не удался. Завершаю.")
                         return
 
@@ -889,7 +975,9 @@ async def run_bot():
 
                 # Кнопок нет — короткий ретрай
                 miss_streak += 1
-                logging.info(f"Кнопок нет (#{miss_streak}). Повторная проверка через {SHORT_RETRY_DELAY_SEC:.1f} сек.")
+                logging.info(
+                    f"Кнопок нет (#{miss_streak}). Повторная проверка через {SHORT_RETRY_DELAY_SEC:.1f} сек."
+                )
                 await asyncio.sleep(SHORT_RETRY_DELAY_SEC)
 
                 clicked_retry = await click_prana_action(page)
@@ -900,7 +988,9 @@ async def run_bot():
                 if miss_streak >= NO_BUTTONS_GRACE_CHECKS:
                     # Вероятно, прану потратили/действий нет — сон
                     nap = random.uniform(SLEEP_MIN_SEC, SLEEP_MAX_SEC)
-                    logging.info(f"Кнопок нет {miss_streak} раз подряд — сон на {nap / 60:.0f} мин.")
+                    logging.info(
+                        f"Кнопок нет {miss_streak} раз подряд — сон на {nap / 60:.0f} мин."
+                    )
                     miss_streak = 0
                     await asyncio.sleep(nap)
 
