@@ -350,9 +350,7 @@ async def wait_after_prana_click(page, timeout_ms=3000) -> bool:
         if bad_loc and not await _element_enabled(bad_loc):
             return True
         await asyncio.sleep(0.2)
-    with suppress(Exception):
-        await page.wait_for_load_state("networkidle", timeout=800)
-    return True
+    return False
 
 
 # ===================== Логин/сессия =====================
@@ -941,6 +939,7 @@ async def run_bot():
             )
             miss_streak = 0
             ticks = 0
+            last_page_refresh = asyncio.get_running_loop().time()
 
             while True:
                 ticks += 1
@@ -960,13 +959,24 @@ async def run_bot():
                         logging.error("Перелогин не удался. Завершаю.")
                         return
 
-                # Периодические подстраховки
+                # Периодическое обновление страницы (каждые 15 мин),
+                # чтобы JS-соединение с сервером не протухло
+                now_loop = asyncio.get_running_loop().time()
+                if now_loop - last_page_refresh >= 900:
+                    logging.debug("Периодическое обновление страницы.")
+                    with suppress(Exception):
+                        await page.goto(HERO_URL, wait_until="domcontentloaded")
+                    last_page_refresh = now_loop
+
+                # Подстраховки при пропусках
                 if miss_streak == RELOAD_ON_MISS:
                     with suppress(Exception):
                         await page.reload(wait_until="domcontentloaded")
+                    last_page_refresh = asyncio.get_running_loop().time()
                 elif miss_streak >= NAVIGATE_ON_MISS:
                     with suppress(Exception):
                         await page.goto(HERO_URL, wait_until="domcontentloaded")
+                    last_page_refresh = asyncio.get_running_loop().time()
 
                 clicked = await click_prana_action(page)
                 if clicked:
@@ -993,6 +1003,9 @@ async def run_bot():
                     )
                     miss_streak = 0
                     await asyncio.sleep(nap)
+                    # После долгого сна страница гарантированно протухла —
+                    # сбрасываем таймер, чтобы обновить на следующей итерации
+                    last_page_refresh = 0
 
         except PlaywrightTimeoutError as te:
             logging.error(f"Таймаут: {te}")
